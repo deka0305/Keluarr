@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' hide Path;
@@ -617,6 +618,86 @@ class MapPin {
   final VoidCallback? onTap;
 }
 
+/// Marker yang meluncur ke posisi baru, bukan meloncat. Fix GPS hanya datang
+/// beberapa detik sekali, jadi tanpa ini setiap pembaruan terlihat sebagai
+/// pindah mendadak — termasuk pin diri sendiri saat merekam.
+class _SmoothMarkers extends StatefulWidget {
+  const _SmoothMarkers(this.pins);
+
+  final List<MapPin> pins;
+
+  @override
+  State<_SmoothMarkers> createState() => _SmoothMarkersState();
+}
+
+class _SmoothMarkersState extends State<_SmoothMarkers>
+    with SingleTickerProviderStateMixin {
+  late final _c = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 700))
+    ..addListener(() => setState(() {}));
+
+  // ponytail: pin dicocokkan lewat urutan daftar — cukup selama daftar tidak
+  // menyisipkan anggota di tengah; beri MapPin sebuah id kalau itu terjadi.
+  late List<LatLng> _from = _targets;
+  late List<LatLng> _to = _from;
+
+  List<LatLng> get _targets => [for (final p in widget.pins) p.at];
+
+  /// Posisi yang sedang terlihat sekarang.
+  List<LatLng> get _now {
+    final t = Curves.easeOut.transform(_c.value);
+    return [
+      for (var i = 0; i < _to.length; i++)
+        LatLng(
+          _from[i].latitude + (_to[i].latitude - _from[i].latitude) * t,
+          _from[i].longitude + (_to[i].longitude - _from[i].longitude) * t,
+        ),
+    ];
+  }
+
+  @override
+  void didUpdateWidget(_SmoothMarkers old) {
+    super.didUpdateWidget(old);
+    final next = _targets;
+    if (next.length != _to.length) {
+      // Jumlah pin berubah — pencocokan per urutan tidak berlaku lagi.
+      _from = _to = next;
+      _c.value = 0;
+      return;
+    }
+    if (!listEquals(next, _to)) {
+      _from = _now;
+      _to = next;
+      _c.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final at = _now;
+    return MarkerLayer(
+      markers: [
+        for (var i = 0; i < widget.pins.length; i++)
+          Marker(
+            point: at[i],
+            width: 150,
+            height: widget.pins[i].size + 26,
+            alignment: widget.pins[i].labelBelow
+                ? Alignment.topCenter
+                : Alignment.bottomCenter,
+            child: _Pin(widget.pins[i]),
+          ),
+      ],
+    );
+  }
+}
+
 class _Pin extends StatelessWidget {
   const _Pin(this.pin);
 
@@ -778,20 +859,7 @@ class LiveMap extends StatelessWidget {
                     ),
                   ),
                 ]),
-              if (markers.isNotEmpty)
-                MarkerLayer(
-                  markers: [
-                    for (final m in markers)
-                      Marker(
-                        point: m.at,
-                        width: 150,
-                        height: m.size + 26,
-                        alignment:
-                            m.labelBelow ? Alignment.topCenter : Alignment.bottomCenter,
-                        child: _Pin(m),
-                      ),
-                  ],
-                ),
+              if (markers.isNotEmpty) _SmoothMarkers(markers),
             ],
           ),
         ),

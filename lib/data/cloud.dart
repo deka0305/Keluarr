@@ -124,6 +124,11 @@ class Cloud {
       // Kode salah: bersihkan baris yang baru ditulis supaya tidak
       // meninggalkan anggota nyangkut di node kosong.
       await _need(code).child('members/$_uid').remove();
+    } else if (g.adminUid == _uid) {
+      // Admin lama masuk lagi pakai kodenya sendiri: baris keanggotaan yang
+      // baru ditulis default 'member', padahal adminUid masih menunjuk dia.
+      // Benarkan supaya badge admin konsisten di semua layar.
+      await putMember(code, name: myName, role: 'admin');
     }
     return g;
   }

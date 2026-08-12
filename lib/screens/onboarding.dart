@@ -72,8 +72,12 @@ class OnboardingScreen extends StatelessWidget {
                     child: _BigTile(
                       icon: Icons.download_outlined,
                       label: 'Gabung pakai kode',
-                      onTap: () => Navigator.push(context,
-                          MaterialPageRoute(builder: (_) => const JoinGroupScreen())),
+                      onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => JoinGroupScreen(
+                                  initialName:
+                                      app.myName == 'Saya' ? '' : app.myName))),
                     ),
                   ),
                 ],
@@ -430,14 +434,18 @@ void _showCodeSheet(BuildContext context, Group g) {
 
 /// 03 · GABUNG PAKAI KODE
 class JoinGroupScreen extends StatefulWidget {
-  const JoinGroupScreen({super.key});
+  const JoinGroupScreen({super.key, this.initialName = ''});
+
+  /// Nama yang sudah pernah diisi pengguna, supaya gabung grup kedua tidak
+  /// menimpanya jadi kosong lagi.
+  final String initialName;
 
   @override
   State<JoinGroupScreen> createState() => _JoinGroupScreenState();
 }
 
 class _JoinGroupScreenState extends State<JoinGroupScreen> {
-  final _myName = TextEditingController();
+  late final _myName = TextEditingController(text: widget.initialName);
   String _code = '';
   String? _error;
   bool _busy = false;
@@ -450,12 +458,14 @@ class _JoinGroupScreenState extends State<JoinGroupScreen> {
     super.dispose();
   }
 
+  bool get _nameOk => _myName.text.trim().isNotEmpty;
+
   Future<void> _submit(AppState app) async {
     setState(() {
       _busy = true;
       _error = null;
     });
-    app.myName = _myName.text.trim().isEmpty ? 'Saya' : _myName.text.trim();
+    app.myName = _myName.text.trim();
     final err = await app.joinGroup(_code);
     if (!mounted) return;
     setState(() {
@@ -484,6 +494,7 @@ class _JoinGroupScreenState extends State<JoinGroupScreen> {
               const SizedBox(height: 8),
               TextField(
                 controller: _myName,
+                onChanged: (_) => setState(() {}),
                 style: TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w600, color: context.fg),
                 decoration: InputDecoration(
@@ -502,6 +513,12 @@ class _JoinGroupScreenState extends State<JoinGroupScreen> {
                   ),
                 ),
               ),
+              if (!_nameOk)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text('Anggota lain melihat nama ini di grup.',
+                      style: TextStyle(fontSize: 11.5, color: context.dim)),
+                ),
               const SizedBox(height: 20),
               Text('Masukkan kode dari admin grup, atau scan QR undangannya.',
                   style: TextStyle(fontSize: 14.5, height: 1.55, color: context.dim)),
@@ -543,8 +560,10 @@ class _JoinGroupScreenState extends State<JoinGroupScreen> {
                 ),
               ),
               BigBtn(_busy ? 'Menggabungkan…' : 'Gabung grup',
-                  onTap: _code.length == _len && !_busy ? () => _submit(app) : null,
-                  color: _code.length == _len ? null : context.line),
+                  onTap: _code.length == _len && _nameOk && !_busy
+                      ? () => _submit(app)
+                      : null,
+                  color: _code.length == _len && _nameOk ? null : context.line),
             ],
           ),
         ),

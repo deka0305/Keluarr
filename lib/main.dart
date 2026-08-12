@@ -38,6 +38,18 @@ class _KeluarrAppState extends State<KeluarrApp> with WidgetsBindingObserver {
     });
   }
 
+  /// Simpan segera begitu app masuk latar. [dispose] tidak bisa diandalkan:
+  /// sistem membunuh proses tanpa memanggilnya, dan itu justru yang terjadi
+  /// saat HP dikantongi selama merekam.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.hidden) {
+      widget.app.flush();
+    }
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);

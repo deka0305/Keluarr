@@ -158,7 +158,7 @@ void main() {
     expect(app.online, isFalse);
     expect(app.me.isMe, isTrue);
     await app.createGroup('Grup Uji', Sport.bike);
-    expect(app.group!.localOnly, isTrue);
+    expect(app.activeGroup!.localOnly, isTrue);
     expect(app.isAdmin, isTrue);
     // Tanpa server, gabung kode selalu mengembalikan pesan kesalahan.
     expect(await app.joinGroup('KLR-ABCD'), isNotNull);
@@ -188,4 +188,193 @@ void main() {
     expect(app.activities, isEmpty);
     expect(app.notice, contains('terlalu pendek'));
   });
+
+  group('grup yang pernah dibuat sendiri', () {
+    test('CreatedGroupRef bolak-balik JSON tanpa kehilangan leftAt', () {
+      final c = CreatedGroupRef(
+          code: 'KLR-AB12',
+          name: 'Keluarr Pagi',
+          sport: Sport.run,
+          createdAt: DateTime(2026, 1, 1),
+          leftAt: DateTime(2026, 2, 1));
+      final back = CreatedGroupRef.fromJson(c.toJson());
+      expect(back.code, c.code);
+      expect(back.name, c.name);
+      expect(back.sport, c.sport);
+      expect(back.createdAt, c.createdAt);
+      expect(back.leftAt, c.leftAt);
+    });
+
+    test('keluar biasa: ditandai yatim (leftAt), bukan dihapus', () async {
+      final app = AppState();
+      addTearDown(app.dispose);
+      final g = Group(code: 'KLR-AB12', name: 'Grup Uji', sport: Sport.run, adminUid: app.myUid);
+      app.groups.add(g);
+      app.activeGroupCode = g.code;
+      app.createdGroups.add(CreatedGroupRef(
+          code: g.code, name: g.name, sport: g.sport, createdAt: DateTime.now()));
+
+      await app.leaveGroup(groupCode: g.code);
+
+      expect(app.groups, isEmpty);
+      expect(app.createdGroups, hasLength(1));
+      expect(app.createdGroups.first.leftAt, isNotNull);
+    });
+
+    test('hapus grup sebagai admin: entrinya ikut hilang, bukan cuma yatim', () async {
+      final app = AppState();
+      addTearDown(app.dispose);
+      final g = Group(code: 'KLR-AB12', name: 'Grup Uji', sport: Sport.run, adminUid: app.myUid);
+      app.groups.add(g);
+      app.activeGroupCode = g.code;
+      app.createdGroups.add(CreatedGroupRef(
+          code: g.code, name: g.name, sport: g.sport, createdAt: DateTime.now()));
+
+      await app.leaveGroup(groupCode: g.code, deleteIfAdmin: true);
+
+      expect(app.createdGroups, isEmpty);
+    });
+
+    test('masuk lagi ke grup yang masih diikuti cuma memindahkan tab aktif', () async {
+      final app = AppState();
+      addTearDown(app.dispose);
+      final g = Group(code: 'KLR-AB12', name: 'Grup Uji', sport: Sport.run, adminUid: app.myUid);
+      final lain = Group(code: 'KLR-ZZ99', name: 'Grup Lain', sport: Sport.bike, adminUid: 'x');
+      app.groups.addAll([g, lain]);
+      app.activeGroupCode = lain.code;
+
+      final err = await app.rejoinCreatedGroup(g.code);
+
+      expect(err, isNull);
+      expect(app.activeGroupCode, g.code);
+    });
+
+    test('masuk lagi tanpa koneksi memberi pesan error, bukan diam-diam gagal', () async {
+      final app = AppState();
+      addTearDown(app.dispose);
+      app.createdGroups.add(CreatedGroupRef(
+          code: 'KLR-AB12',
+          name: 'Grup Uji',
+          sport: Sport.run,
+          createdAt: DateTime.now(),
+          leftAt: DateTime.now()));
+
+      final err = await app.rejoinCreatedGroup('KLR-AB12');
+
+      expect(err, isNotNull);
+      expect(app.createdGroups.first.leftAt, isNotNull,
+          reason: 'gagal masuk tidak boleh menghapus status yatimnya');
+    });
+
+    test('ganti nama/olahraga grup ikut disamakan di daftar pernah-dibuat', () async {
+      final app = AppState();
+      addTearDown(app.dispose);
+      final g = Group(code: 'KLR-AB12', name: 'Nama Lama', sport: Sport.run, adminUid: app.myUid);
+      app.groups.add(g);
+      app.activeGroupCode = g.code;
+      app.createdGroups.add(CreatedGroupRef(
+          code: g.code, name: 'Nama Lama', sport: Sport.run, createdAt: DateTime.now()));
+
+      await app.saveGroupSettings(name: 'Nama Baru', sport: Sport.bike, targetKm: 300);
+
+      expect(app.createdGroups.first.name, 'Nama Baru');
+      expect(app.createdGroups.first.sport, Sport.bike);
+    });
+  });
+
+  group('rekaman selamat dari app yang dibunuh', () {
+    RecordSession berlari() {
+      final s = RecordSession(Sport.run);
+      for (var i = 0; i < 40; i++) {
+        s.onFix(LatLng(-6.1783 + i * 0.0002, 106.6319), 10.5, null);
+      }
+      s.lap();
+      return s;
+    }
+
+    test('potret sesi bolak-balik tanpa kehilangan jejak & lap', () {
+      final s = berlari();
+      addTearDown(s.dispose);
+      final pulih = RecordSession.fromJson(s.toJson());
+      addTearDown(pulih.dispose);
+
+      expect(pulih.km, closeTo(s.km, 0.001));
+      expect(pulih.points.length, s.points.length);
+      expect(pulih.points.last.latitude, closeTo(s.points.last.latitude, 1e-6));
+      expect(pulih.movingSec, s.movingSec);
+      expect(pulih.laps, s.laps);
+      expect(pulih.startedAt, s.startedAt);
+      // Selalu dijeda: waktu selama app mati bukan waktu bergerak.
+      expect(pulih.paused, isTrue);
+    });
+
+    test('sesi berjalan ikut tersimpan, sesi selesai tidak', () async {
+      final store = _MemStore();
+      final app = AppState(store: store);
+      addTearDown(app.dispose);
+      app.session = berlari();
+
+      await app.flush();
+      expect(store.last!['session'], isNotNull);
+
+      await app.finishSession();
+      expect(store.last!['session'], isNull,
+          reason: 'kalau tertinggal, sesi yang sudah selesai dipulihkan lagi');
+    });
+
+    test('boot memulihkan rekaman yang tertinggal', () async {
+      final store = _MemStore();
+      final asal = AppState(store: store);
+      addTearDown(asal.dispose);
+      asal.session = berlari();
+      await asal.flush();
+
+      final lagi = AppState(store: store);
+      addTearDown(lagi.dispose);
+      await lagi.boot();
+
+      expect(lagi.session, isNotNull);
+      expect(lagi.session!.km, closeTo(asal.session!.km, 0.001));
+      expect(lagi.session!.paused, isTrue);
+      expect(lagi.notice, contains('dipulihkan'));
+    });
+
+    test('rekaman basi disimpan jadi aktivitas, bukan dibuang', () async {
+      final store = _MemStore();
+      final asal = AppState(store: store);
+      addTearDown(asal.dispose);
+      asal.session = berlari();
+      await asal.flush();
+      // Mundurkan waktu fix terakhir lewat ambang 6 jam.
+      final sesi = (store.last!['session'] as Map).cast<String, dynamic>();
+      final trek = (sesi['track'] as Map).cast<String, dynamic>();
+      trek['end'] =
+          DateTime.now().subtract(const Duration(hours: 9)).toIso8601String();
+
+      final lagi = AppState(store: store);
+      addTearDown(lagi.dispose);
+      await lagi.boot();
+
+      expect(lagi.session, isNull);
+      expect(lagi.activities, hasLength(1));
+      expect(lagi.activities.first.km, closeTo(asal.session!.km, 0.001));
+    });
+  });
+}
+
+/// Store di memori — menghindari SharedPreferences di unit test.
+class _MemStore implements Store {
+  Map<String, dynamic>? last;
+
+  @override
+  Future<Map<String, dynamic>?> load() async => last;
+
+  @override
+  void save(Map<String, dynamic> state) => last = state;
+
+  @override
+  Future<void> flushNow(Map<String, dynamic> state) async => last = state;
+
+  @override
+  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
 }

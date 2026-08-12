@@ -77,6 +77,11 @@ class Gps {
   String state = 'moving';
   String sport = 'run';
 
+  /// Sesuai layar 19: kalau dimatikan, anggota lain tetap lihat titikmu
+  /// tapi tanpa status/kecepatan sungguhan.
+  bool shareStatus = true;
+  bool shareSpeed = true;
+
   bool get running => _sub != null;
 
   /// Kode grup yang posisinya sedang dikirim, null kalau hanya merekam lokal.
@@ -125,6 +130,7 @@ class Gps {
     _code = null;
     _lastSent = null;
     _lastSentAt = null;
+    _lastGood = null;
     await _sub?.cancel();
     _sub = null;
     _heartbeat?.cancel();
@@ -137,7 +143,38 @@ class Gps {
     }
   }
 
+  /// Akurasi terburuk yang masih dipercaya. Di atas ini fix biasanya hasil
+  /// triangulasi menara/WiFi dan letaknya meleset puluhan meter — itulah yang
+  /// terlihat sebagai titik meloncat.
+  static const _maxAccuracy = 30.0;
+
+  /// 40 m/s ≈ 144 km/h. Di atas itu bukan orang berlari, tapi fix melenceng.
+  static const _maxSpeedMps = 40.0;
+
+  /// Kalau sinyal jelek berkepanjangan, fix buruk tetap diterima setelah jeda
+  /// ini — lebih baik posisi kasar daripada peta yang membeku.
+  static const _staleAfter = Duration(seconds: 30);
+
+  Position? _lastGood;
+
+  /// Fix yang jelas tidak masuk akal dibuang di sini, satu tempat, supaya
+  /// jejak, kiriman ke grup, dan marker peta sama-sama bersih.
+  @visibleForTesting
+  static bool plausible(Position? prev, Position pos) {
+    if (prev == null) return true;
+    final secs =
+        pos.timestamp.difference(prev.timestamp).inMilliseconds / 1000;
+    if (secs <= 0) return false;
+    if (secs > _staleAfter.inSeconds) return true;
+    if (pos.accuracy.isFinite && pos.accuracy > _maxAccuracy) return false;
+    final meters = Geolocator.distanceBetween(
+        prev.latitude, prev.longitude, pos.latitude, pos.longitude);
+    return meters / secs <= _maxSpeedMps;
+  }
+
   void _onFix(Position pos) {
+    if (!plausible(_lastGood, pos)) return;
+    _lastGood = pos;
     final at = LatLng(pos.latitude, pos.longitude);
     final kmh = pos.speed.isFinite && pos.speed > 0 ? pos.speed * 3.6 : 0.0;
     if (pos.heading.isFinite) _lastHeading = pos.heading;
@@ -175,10 +212,10 @@ class Gps {
         .putLive(code,
             lat: at.latitude,
             lng: at.longitude,
-            speedKmh: kmh,
+            speedKmh: shareSpeed ? kmh : 0,
             heading: _lastHeading,
             sport: sport,
-            state: state)
+            state: shareStatus ? state : 'moving')
         .catchError((Object e) => debugPrint('gps: kirim gagal ($e)'));
   }
 

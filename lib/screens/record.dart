@@ -232,8 +232,19 @@ class _ActiveViewState extends State<_ActiveView> {
     final pos = app.myPos;
     if (pos == null || pos == _lastFollowed) return;
     _lastFollowed = pos;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _map.move(pos, 16);
+    final oldPos = _map.camera.center;
+    var step = 0;
+    Timer.periodic(const Duration(milliseconds: 40), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      step++;
+      final pct = (step * 40 / 400).clamp(0.0, 1.0);
+      final lat = oldPos.latitude + (pos.latitude - oldPos.latitude) * pct;
+      final lng = oldPos.longitude + (pos.longitude - oldPos.longitude) * pct;
+      _map.move(LatLng(lat, lng), 16);
+      if (pct >= 1.0) t.cancel();
     });
   }
 
@@ -325,11 +336,21 @@ class _ActiveViewState extends State<_ActiveView> {
                           await app.gps.start();
                         }
                         if (mounted && app.myPos != null) {
-                          try {
-                            _map.move(app.myPos!, 16);
-                          } catch (e) {
-                            debugPrint('Map move error: $e');
-                          }
+                          final oldPos = _map.camera.center;
+                          final pos = app.myPos!;
+                          var step = 0;
+                          Timer.periodic(const Duration(milliseconds: 40), (t) {
+                            if (!mounted) {
+                              t.cancel();
+                              return;
+                            }
+                            step++;
+                            final pct = (step * 40 / 400).clamp(0.0, 1.0);
+                            final lat = oldPos.latitude + (pos.latitude - oldPos.latitude) * pct;
+                            final lng = oldPos.longitude + (pos.longitude - oldPos.longitude) * pct;
+                            _map.move(LatLng(lat, lng), 16);
+                            if (pct >= 1.0) t.cancel();
+                          });
                         }
                       },
                       borderRadius: BorderRadius.circular(10),

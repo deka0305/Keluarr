@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' hide Path;
@@ -172,8 +174,19 @@ class _MapScreenState extends State<MapScreen> {
     final pos = app.myPos;
     if (!_follow || pos == null || pos == _lastFollowed) return;
     _lastFollowed = pos;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _follow) _map.move(pos, _map.camera.zoom);
+    final oldPos = _map.camera.center;
+    var step = 0;
+    Timer.periodic(const Duration(milliseconds: 40), (t) {
+      if (!mounted || !_follow) {
+        t.cancel();
+        return;
+      }
+      step++;
+      final pct = (step * 40 / 400).clamp(0.0, 1.0);
+      final lat = oldPos.latitude + (pos.latitude - oldPos.latitude) * pct;
+      final lng = oldPos.longitude + (pos.longitude - oldPos.longitude) * pct;
+      _map.move(LatLng(lat, lng), _map.camera.zoom);
+      if (pct >= 1.0) t.cancel();
     });
   }
 

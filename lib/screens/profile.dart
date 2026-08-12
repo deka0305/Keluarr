@@ -154,8 +154,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 MenuRow('Tema',
                     icon: Icons.dark_mode_outlined,
                     trailing: _themeLabel(app.themeMode),
-                    onTap: () => Navigator.push(context,
-                        MaterialPageRoute(builder: (_) => const PrivacyScreen()))),
+                    onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const PrivacyScreen(jumpToTampilan: true)))),
                 MenuRow('Bahasa',
                     icon: Icons.language,
                     trailing: app.indonesian ? 'INDONESIA' : 'ENGLISH',
@@ -223,13 +225,32 @@ class _Record extends StatelessWidget {
 
 /// 19 · PRIVASI, TEMA & BAHASA
 class PrivacyScreen extends StatefulWidget {
-  const PrivacyScreen({super.key});
+  const PrivacyScreen({super.key, this.jumpToTampilan = false});
+
+  /// True kalau dibuka dari menu "Tema" di Profil — langsung gulir ke bagian
+  /// TAMPILAN supaya tidak terasa salah layar.
+  final bool jumpToTampilan;
 
   @override
   State<PrivacyScreen> createState() => _PrivacyScreenState();
 }
 
 class _PrivacyScreenState extends State<PrivacyScreen> {
+  final _tampilanKey = GlobalKey();
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.jumpToTampilan) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final ctx = _tampilanKey.currentContext;
+        if (ctx != null) {
+          Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 300));
+        }
+      });
+    }
+  }
+
   /// Ubah izin berbagi lalu terapkan ke server (kirim/hapus node live &
   /// agregat) — tanpa ini togglenya hanya kosmetik.
   void _apply(AppState app, void Function() change) {
@@ -312,7 +333,7 @@ class _PrivacyScreenState extends State<PrivacyScreen> {
             ),
           ),
           const SizedBox(height: 10),
-          const L('TAMPILAN'),
+          L('TAMPILAN', key: _tampilanKey),
           const SizedBox(height: 10),
           Panel(
             child: Column(

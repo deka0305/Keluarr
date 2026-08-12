@@ -262,6 +262,47 @@ class Group {
       )..localOnly = j['local'] as bool? ?? false;
 }
 
+/// Jejak grup yang pernah dibuat sendiri di HP ini — bertahan walau grupnya
+/// sudah ditinggalkan atau tidak lagi ada di [AppState.groups], supaya
+/// kodenya tidak hilang begitu saja. `adminUid` di server tidak pernah
+/// berubah saat admin keluar, jadi masuk lagi dengan kode yang sama otomatis
+/// mengembalikan status admin ([AppState.isAdmin] membaca `adminUid`, bukan
+/// baris keanggotaan) — cukup untuk menghapus grup itu kalau memang mau.
+class CreatedGroupRef {
+  CreatedGroupRef({
+    required this.code,
+    required this.name,
+    required this.sport,
+    required this.createdAt,
+    this.leftAt,
+  });
+
+  final String code;
+  String name;
+  Sport sport;
+  final DateTime createdAt;
+
+  /// Null berarti masih jadi anggota (belum pernah keluar sejak dibuat).
+  DateTime? leftAt;
+
+  Map<String, dynamic> toJson() => {
+        'code': code,
+        'name': name,
+        'sport': sport.name,
+        'created': createdAt.toIso8601String(),
+        if (leftAt != null) 'left': leftAt!.toIso8601String(),
+      };
+
+  static CreatedGroupRef fromJson(Map<String, dynamic> j) => CreatedGroupRef(
+        code: j['code'] as String,
+        name: j['name'] as String? ?? 'Grup',
+        sport: sportFromKey(j['sport'] as String?),
+        createdAt:
+            DateTime.tryParse(j['created'] as String? ?? '') ?? DateTime.now(),
+        leftAt: j['left'] == null ? null : DateTime.tryParse(j['left'] as String),
+      );
+}
+
 enum CardStyle { photoOverlay, mapOnPhoto, plain }
 
 enum CardRatio { r9x16, r1x1 }
@@ -311,6 +352,10 @@ class AppState extends ChangeNotifier {
   Sport lastSport = Sport.run;
 
   final List<Group> groups = [];
+
+  /// Grup yang pernah dibuat sendiri di HP ini, termasuk yang sudah
+  /// ditinggalkan — lihat [CreatedGroupRef].
+  final List<CreatedGroupRef> createdGroups = [];
   String? activeGroupCode;
   bool skippedGroup = false;
   final List<Activity> activities = [];
@@ -373,7 +418,34 @@ class AppState extends ChangeNotifier {
     if (saved != null) _restore(saved);
     me.name = myName;
     if (activeGroup != null) _followGroup();
+    await _resumeCrashed();
     notifyListeners();
+  }
+
+  /// Rekaman yang tertinggal karena app dibunuh di tengah jalan — di Android
+  /// itu kejadian biasa: layar mati, HP di kantong, proses dibersihkan sistem.
+  Map<String, dynamic>? _crashed;
+
+  Future<void> _resumeCrashed() async {
+    final j = _crashed;
+    _crashed = null;
+    if (j == null || session != null) return;
+    final RecordSession s;
+    try {
+      s = RecordSession.fromJson(j);
+    } catch (e) {
+      debugPrint('state: rekaman tertinggal tidak terbaca ($e)');
+      return;
+    }
+    s.addListener(_onSessionTick);
+    session = s;
+    final idle = DateTime.now().difference(s.track.updatedAt ?? s.startedAt);
+    if (idle > const Duration(hours: 6)) {
+      // Terlalu basi untuk dilanjutkan — disimpan apa adanya, bukan dibuang.
+      await finishSession();
+      return;
+    }
+    notice = 'Rekaman ${fmtKm(s.km)} km dipulihkan — masih dijeda.';
   }
 
   void _restore(Map<String, dynamic> j) {
@@ -404,6 +476,11 @@ class AppState extends ChangeNotifier {
           Activity.fromJson((a as Map).cast<String, dynamic>()),
       ]);
     activities.sort((a, b) => b.startedAt.compareTo(a.startedAt));
+    createdGroups.addAll([
+      for (final c in (j['created'] as List? ?? []))
+        CreatedGroupRef.fromJson((c as Map).cast<String, dynamic>()),
+    ]);
+    _crashed = (j['session'] as Map?)?.cast<String, dynamic>();
   }
 
   Map<String, dynamic> _snapshot() => {
@@ -421,12 +498,18 @@ class AppState extends ChangeNotifier {
         'lastSport': lastSport.name,
         'activeGroup': activeGroupCode,
         'groups': [for (final g in groups) g.toJson()],
+        'created': [for (final c in createdGroups) c.toJson()],
         'acts': [for (final a in activities) a.toJson()],
+        if (session != null) 'session': session!.toJson(),
       };
 
   void _persist() => _store?.save(_snapshot());
 
   Future<void> _persistNow() async => _store?.flushNow(_snapshot());
+
+  /// Tulis simpanan sekarang juga. Dipanggil saat app masuk latar: debounce
+  /// satu detik di [Store] bisa keburu mati bersama prosesnya.
+  Future<void> flush() => _persistNow();
 
   /// Ubah state + simpan + beri tahu UI. Satu pintu supaya tidak ada perubahan
   /// yang lupa dipersistensi — bug paling gampang lolos di app seperti ini.
@@ -461,6 +544,10 @@ class AppState extends ChangeNotifier {
     }
     g.monthlyTargetKm = targetKm;
     groups.add(g);
+    if (!g.localOnly) {
+      createdGroups.add(CreatedGroupRef(
+          code: g.code, name: g.name, sport: g.sport, createdAt: DateTime.now()));
+    }
     activeGroupCode = code;
     skippedGroup = false;
     _roster.clear();
@@ -516,6 +603,25 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Masuk lagi ke grup yang pernah dibuat sendiri lalu ditinggalkan — bukan
+  /// gabung sebagai anggota baru, cuma menulis baris keanggotaan sendiri lagi.
+  /// Kalau ini satu-satunya admin yang tersisa, [isAdmin] otomatis benar lagi
+  /// begitu masuk, karena itu dibaca dari `adminUid` di server, bukan dari
+  /// baris keanggotaan yang tadi terhapus saat keluar.
+  Future<String?> rejoinCreatedGroup(String code) async {
+    if (groups.any((g) => g.code == code)) {
+      switchGroup(code);
+      return null;
+    }
+    final err = await joinGroup(code);
+    if (err == null) {
+      final idx = createdGroups.indexWhere((c) => c.code == code);
+      if (idx != -1) createdGroups[idx].leftAt = null;
+      _persist();
+    }
+    return err;
+  }
+
   Future<void> leaveGroup({String? groupCode, bool deleteIfAdmin = false}) async {
     final code = groupCode ?? activeGroupCode;
     if (code == null) return;
@@ -536,6 +642,17 @@ class AppState extends ChangeNotifier {
     }
 
     groups.removeWhere((x) => x.code == code);
+    final createdIdx = createdGroups.indexWhere((c) => c.code == code);
+    if (createdIdx != -1) {
+      if (deleteIfAdmin) {
+        // Benar-benar dihapus dari server: tidak ada lagi yang bisa dimasuki.
+        createdGroups.removeAt(createdIdx);
+      } else {
+        // Yatim, bukan hilang — adminUid di server tetap milikku, jadi kode
+        // ini masih bisa dipakai masuk lagi.
+        createdGroups[createdIdx].leftAt = DateTime.now();
+      }
+    }
     if (activeGroupCode == code) {
       _rosterSub?.cancel();
       _rosterSub = null;
@@ -588,6 +705,14 @@ class AppState extends ChangeNotifier {
         ..name = name
         ..sport = sport
         ..monthlyTargetKm = targetKm;
+      // Ikut disamakan supaya "Grup yang pernah kamu buat" tidak menampilkan
+      // nama basi kalau grup ini nanti ditinggalkan.
+      final created = createdGroups.where((c) => c.code == g.code);
+      for (final c in created) {
+        c
+          ..name = name
+          ..sport = sport;
+      }
     });
     if (online && !g.localOnly) {
       try {
@@ -763,6 +888,9 @@ class AppState extends ChangeNotifier {
   /// Dipanggil layar Privasi setelah toggle berbagi diubah.
   Future<void> applySharing() async {
     await _pushStats();
+    gps
+      ..shareStatus = shareStatus
+      ..shareSpeed = shareSpeed;
     final g = activeGroup;
     if (session != null && g != null) {
       // Berhenti/mulai kirim posisi sesuai izin terbaru, tanpa memutus rekaman.
@@ -786,7 +914,9 @@ class AppState extends ChangeNotifier {
     lastSport = sport;
     gps
       ..sport = sport.name
-      ..state = 'moving';
+      ..state = 'moving'
+      ..shareStatus = shareStatus
+      ..shareSpeed = shareSpeed;
     final g = activeGroup;
     final res = await gps.start(
         code: g?.code,
@@ -814,10 +944,23 @@ class AppState extends ChangeNotifier {
       ..lastPing = Duration.zero
       ..sharesLocation = gps.sharingCode != null;
     final s = session;
-    if (s != null) s.onFix(at, speedKmh, altitude);
+    if (s != null) {
+      s.onFix(at, speedKmh, altitude);
+      // Titipkan sesi ke simpanan tiap 10 detik. Jauh lebih jarang dari fix
+      // (blob-nya ditulis ulang utuh), tapi cukup rapat: paling banyak 10 detik
+      // rekaman yang hilang kalau sistem membunuh app.
+      final now = DateTime.now();
+      if (_sessionSavedAt == null ||
+          now.difference(_sessionSavedAt!) > const Duration(seconds: 10)) {
+        _sessionSavedAt = now;
+        _persist();
+      }
+    }
     _recomputePack();
     notifyListeners();
   }
+
+  DateTime? _sessionSavedAt;
 
   void _onSessionTick() {
     final s = session;
@@ -849,6 +992,7 @@ class AppState extends ChangeNotifier {
   Future<void> discardSession() async {
     await gps.stop();
     _closeSession();
+    await _persistNow();
     notifyListeners();
   }
 
@@ -856,9 +1000,13 @@ class AppState extends ChangeNotifier {
     session?.removeListener(_onSessionTick);
     session?.dispose();
     session = null;
+    _sessionSavedAt = null;
     me
       ..state = MemberState.moving
       ..speedKmh = 0;
+    // Wajib: tanpa ini sesi yang sudah selesai tetap ada di simpanan dan
+    // dipulihkan lagi saat app dibuka berikutnya.
+    _persist();
   }
 
   void deleteActivity(Activity a) {
@@ -965,13 +1113,22 @@ class AppState extends ChangeNotifier {
 /// dari GPS lewat [onFix]. Kalau tak ada fix sama sekali (emulator tanpa GPS),
 /// jaraknya nol — itu jujur, bukan angka palsu.
 class RecordSession extends ChangeNotifier {
-  RecordSession(this.sport) {
+  RecordSession(
+    this.sport, {
+    Track? track,
+    DateTime? startedAt,
+    this.elapsedSec = 0,
+    this.pausedSec = 0,
+    List<(int, double)>? laps,
+  })  : track = track ?? Track(),
+        startedAt = startedAt ?? DateTime.now(),
+        laps = laps ?? [] {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
   }
 
   final Sport sport;
-  final DateTime startedAt = DateTime.now();
-  final Track track = Track();
+  final DateTime startedAt;
+  final Track track;
 
   Timer? _timer;
   int elapsedSec = 0;
@@ -1038,7 +1195,7 @@ class RecordSession extends ChangeNotifier {
 
   /// Lap manual: detik-bergerak dan km saat tombol ditekan. Terpisah dari
   /// [splits] yang dihitung per km — lap itu penanda pengguna, bukan jarak.
-  final List<(int sec, double km)> laps = [];
+  final List<(int sec, double km)> laps;
 
   void lap() {
     laps.add((movingSec, km));
@@ -1059,6 +1216,34 @@ class RecordSession extends ChangeNotifier {
         track: List.of(track.points),
         secs: List.of(track.secs),
       );
+
+  /// Potret sesi yang sedang berjalan, supaya rekaman selamat kalau sistem
+  /// membunuh app di tengah lari.
+  Map<String, dynamic> toJson() => {
+        'sport': sport.name,
+        'start': startedAt.toIso8601String(),
+        'elapsed': elapsedSec,
+        'paused': pausedSec,
+        'laps': [
+          for (final l in laps) [l.$1, l.$2],
+        ],
+        'track': track.toJson(),
+      };
+
+  /// Sesi yang dipulihkan selalu mulai dalam keadaan **dijeda**: waktu selama
+  /// app mati bukan waktu bergerak, dan melanjutkan harus keputusan sadar.
+  static RecordSession fromJson(Map<String, dynamic> j) => RecordSession(
+        sportFromKey(j['sport'] as String?),
+        track: Track.fromJson(
+            ((j['track'] as Map?) ?? const {}).cast<String, dynamic>()),
+        startedAt: DateTime.parse(j['start'] as String),
+        elapsedSec: (j['elapsed'] as num?)?.toInt() ?? 0,
+        pausedSec: (j['paused'] as num?)?.toInt() ?? 0,
+        laps: [
+          for (final l in (j['laps'] as List? ?? []))
+            ((l as List)[0] as int, (l[1] as num).toDouble()),
+        ],
+      )..paused = true;
 
   static String _partOfDay(DateTime t) => t.hour < 10
       ? 'pagi'

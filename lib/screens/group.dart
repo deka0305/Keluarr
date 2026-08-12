@@ -65,12 +65,28 @@ class GroupScreen extends StatelessWidget {
                 label: 'Gabung kode',
                 onTap: () => Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const JoinGroupScreen()),
+                  MaterialPageRoute(
+                      builder: (_) => JoinGroupScreen(
+                          initialName: app.myName == 'Saya' ? '' : app.myName)),
                 ),
               ),
             ),
           ],
         ),
+        if (app.createdGroups.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Panel(
+            padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 2),
+            child: MenuRow(
+              'Grup yang pernah kamu buat',
+              icon: Icons.history,
+              trailing: '${app.createdGroups.length}',
+              divider: false,
+              onTap: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const MyCreatedGroupsScreen())),
+            ),
+          ),
+        ],
         const SizedBox(height: 10),
         if (g == null)
           Panel(
@@ -326,6 +342,115 @@ class GroupScreen extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Grup yang pernah dibuat sendiri di HP ini — termasuk yang sudah
+/// ditinggalkan. Kode undangannya tersimpan lokal, jadi admin bisa masuk
+/// lagi tanpa perlu diundang ulang, lalu (kalau memang mau) menghapusnya
+/// lewat menu "Hapus grup" di layar Grup setelah masuk.
+class MyCreatedGroupsScreen extends StatefulWidget {
+  const MyCreatedGroupsScreen({super.key});
+
+  @override
+  State<MyCreatedGroupsScreen> createState() => _MyCreatedGroupsScreenState();
+}
+
+class _MyCreatedGroupsScreenState extends State<MyCreatedGroupsScreen> {
+  String? _busyCode;
+
+  Future<void> _open(AppState app, CreatedGroupRef c) async {
+    setState(() => _busyCode = c.code);
+    final err = await app.rejoinCreatedGroup(c.code);
+    if (!mounted) return;
+    setState(() => _busyCode = null);
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+      return;
+    }
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = AppScope.of(context);
+    final list = [...app.createdGroups]
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return Scaffold(
+      appBar: backBar(context, 'Grup yang pernah kamu buat'),
+      body: list.isEmpty
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Text('Belum ada grup yang kamu buat.',
+                    style: TextStyle(fontSize: 14, color: context.dim)),
+              ),
+            )
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(K.pad, 8, K.pad, 20),
+              children: [
+                for (final c in list) ...[
+                  _CreatedGroupRow(
+                    ref: c,
+                    aktif: app.groups.any((g) => g.code == c.code),
+                    busy: _busyCode == c.code,
+                    onTap: () => _open(app, c),
+                  ),
+                  const SizedBox(height: 10),
+                ],
+              ],
+            ),
+    );
+  }
+}
+
+class _CreatedGroupRow extends StatelessWidget {
+  const _CreatedGroupRow(
+      {required this.ref, required this.aktif, required this.busy, required this.onTap});
+
+  final CreatedGroupRef ref;
+  final bool aktif;
+  final bool busy;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Panel(
+        child: Row(
+          children: [
+            Avatar(ref.name.isEmpty ? '??' : ref.name.substring(0, 1).toUpperCase(),
+                size: 40, radius: 12),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(ref.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w700, color: context.fg)),
+                  const SizedBox(height: 3),
+                  Mono('${ref.code} · ${ref.sport.label.toUpperCase()}', size: 10),
+                  const SizedBox(height: 3),
+                  Text(
+                      aktif
+                          ? 'Kamu masih anggota'
+                          : 'Kamu keluar ${fmtAgo(DateTime.now().difference(ref.leftAt ?? ref.createdAt))} lalu',
+                      style: TextStyle(fontSize: 11.5, color: context.dim)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            SizedBox(
+              width: 84,
+              child: BigBtn(
+                busy ? '…' : (aktif ? 'Buka' : 'Masuk lagi'),
+                height: 38,
+                onTap: busy ? null : onTap,
+              ),
+            ),
+          ],
+        ),
+      );
 }
 
 Future<void> _confirm(

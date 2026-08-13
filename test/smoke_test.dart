@@ -144,10 +144,30 @@ void main() {
     }
   });
 
+  testWidgets('app baru: isi nama dulu, baru onboarding grup', (t) async {
+    phone(t);
+    final app = AppState();
+    addTearDown(app.dispose);
+    await t.pumpWidget(host(app, const Root()));
+    await t.pumpAndSettle();
+
+    // Sambutan dulu — tanpa ini pemakai yang melewati grup tidak pernah
+    // ditanya nama dan profilnya selamanya "Saya".
+    expect(find.text('Halo! Siapa\nnama kamu?'), findsOneWidget);
+    await t.enterText(find.byType(TextField).first, 'Ari Ramdani');
+    await t.pumpAndSettle();
+    await t.tap(find.text('Lanjut'));
+    await t.pumpAndSettle();
+
+    expect(app.myName, 'Ari Ramdani');
+    expect(app.nameSet, isTrue);
+    expect(find.text('Belum ada grup'), findsOneWidget);
+  });
+
   testWidgets('tanpa grup: onboarding dulu, tab GRUP menawarkan buat/gabung',
       (t) async {
     phone(t);
-    final app = AppState();
+    final app = AppState()..setIdentity(name: 'Ari');
     addTearDown(app.dispose);
     await t.pumpWidget(host(app, const Root()));
     await t.pumpAndSettle();

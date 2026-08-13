@@ -27,11 +27,14 @@ extension SportInfo on Sport {
         Sport.bike: 'Sepeda',
         Sport.walk: 'Jalan kaki',
       }[this]!;
+  /// Metrik yang benar-benar ditampilkan app untuk olahraga ini. Jangan
+  /// menjanjikan yang tidak diukur: tanpa pedometer, "LANGKAH" hanya bisa jadi
+  /// angka karangan.
   String get metrics => const {
         Sport.run: 'PACE · SPLIT KM · KALORI',
         Sport.hike: 'ELEVASI · DURASI · KALORI',
         Sport.bike: 'KECEPATAN · ELEVASI · KALORI',
-        Sport.walk: 'LANGKAH · DURASI · KALORI',
+        Sport.walk: 'JARAK · DURASI · KALORI',
       }[this]!;
   IconData get icon => const {
         Sport.run: Icons.directions_run,
@@ -54,9 +57,67 @@ Sport sportFromKey(String? k) =>
 
 enum MemberState { moving, paused, offline }
 
-/// Berat badan untuk estimasi kalori. Knob kalibrasi — pindahkan ke profil
-/// pengguna kalau angka kalori mulai dipakai serius.
-const kBodyWeightKg = 70.0;
+/// Ukuran badan pemakai: acuan estimasi kalori (berat) dan BMI (tinggi).
+///
+/// Disimpan sebagai satu nilai tingkat-modul, bukan diteruskan sebagai
+/// parameter ke mana-mana: satu pemasangan app = satu pemakai, dan
+/// [Activity.calories] ikut dipanggil dari kartu share yang sengaja tidak
+/// punya akses ke [AppState]. [AppState] yang memiliki dan menyimpannya —
+/// lihat [AppState.bodyWeightKg].
+class Body {
+  static const defaultWeightKg = 70.0;
+
+  /// Batas wajar, sekaligus penjaga dari ketikan salah (misal 700 kg) yang
+  /// akan membuat angka kalori ngawur di seluruh riwayat.
+  static const minWeightKg = 25.0;
+  static const maxWeightKg = 250.0;
+  static const minHeightCm = 90.0;
+  static const maxHeightCm = 230.0;
+
+  static double weightKg = defaultWeightKg;
+
+  /// Null berarti belum diisi — BMI tidak ditampilkan, bukan ditebak.
+  static double? heightCm;
+
+  static void reset() {
+    weightKg = defaultWeightKg;
+    heightCm = null;
+  }
+
+  static double? get bmi {
+    final h = heightCm;
+    if (h == null || h <= 0) return null;
+    final m = h / 100;
+    return weightKg / (m * m);
+  }
+
+  /// Kategori BMI menurut ambang WHO.
+  static String? get bmiLabel {
+    final v = bmi;
+    if (v == null) return null;
+    if (v < 18.5) return 'KURANG';
+    if (v < 25) return 'NORMAL';
+    if (v < 30) return 'BERLEBIH';
+    return 'OBESITAS';
+  }
+}
+
+/// Estimasi kalori: kerja mendatar + kerja menaikkan badan.
+///
+/// Suku elevasi berasal dari fisika, bukan tebakan: energi potensial m·g·h
+/// joule, dibagi efisiensi otot ~25% dan 4184 J/kkal →
+/// `kg · m · 9,81 / (0,25 · 4184)` ≈ `kg · m · 0,0094` kkal.
+///
+/// Tanpa suku ini hiking 8 km dengan tanjakan 700 m dihitung nyaris sama
+/// dengan jalan kaki 8 km di jalan datar — padahal justru tanjakannya yang
+/// menghabiskan tenaga.
+/// [weightKg] null → pakai berat badan pemakai dari [Body].
+int estimateKcal(Sport sport, double km, double elevGainM, {double? weightKg}) {
+  final kg = weightKg ?? Body.weightKg;
+  final datar = sport.kcalPerKm * km * kg;
+  final naik = elevGainM <= 0 ? 0.0 : kg * elevGainM * 0.0094;
+  return (datar + naik).round();
+}
 
 class KmSplit {
   const KmSplit(this.km, this.paceSec, {this.elevM = 0});
@@ -106,7 +167,7 @@ class Activity {
   double get km => distanceM / 1000;
   double get avgSpeedKmh => movingSec == 0 ? 0 : km / (movingSec / 3600);
   int get avgPaceSecPerKm => distanceM < 10 ? 0 : (movingSec / km).floor();
-  int get calories => (sport.kcalPerKm * km * kBodyWeightKg).round();
+  int get calories => estimateKcal(sport, km, elevGainM);
   bool get isPrivate => true;
 
   /// Jejak dalam ruang 0..1 untuk digambar tanpa peta (thumbnail & kartu share).
@@ -200,10 +261,23 @@ class Member {
 
   /// Warna marker: diturunkan dari uid supaya tiap anggota tetap sama warnanya
   /// di semua HP tanpa perlu disimpan di server.
+  ///
+  /// Sengaja BUKAN `uid.hashCode`: nilainya tidak dijamin sama antar versi Dart
+  /// SDK, jadi begitu anggota memakai app dengan SDK berbeda warnanya bisa
+  /// bergeser — justru membatalkan janji "sama di semua HP". FNV-1a di bawah
+  /// hasilnya tetap sama selamanya.
   Color get color {
     if (isMe) return K.orange;
     const palette = [K.success, K.blue, K.warning, Color(0xFF8B5CF6), Color(0xFF0EA5A4)];
-    return palette[uid.hashCode.abs() % palette.length];
+    return palette[_stableHash(uid) % palette.length];
+  }
+
+  static int _stableHash(String s) {
+    var h = 0x811c9dc5;
+    for (final unit in s.codeUnits) {
+      h = ((h ^ unit) * 0x01000193) & 0x7fffffff;
+    }
+    return h;
   }
 
   String get stateLabel => switch (state) {
@@ -328,6 +402,9 @@ class AppState extends ChangeNotifier {
   AppState({this.cloud, Gps? gps, Store? store, bool demo = false})
       : gps = gps ?? Gps(cloud ?? Cloud()),
         _store = store {
+    // [Body] tingkat-modul: mulai bersih supaya nilai dari pemakaian
+    // sebelumnya tidak bocor sebelum [_restore] mengisinya.
+    Body.reset();
     this.gps.onFix = _onFix;
     if (demo) _seedDemo();
   }
@@ -339,6 +416,33 @@ class AppState extends ChangeNotifier {
   // ── Identitas & preferensi ──────────────────────────────────────────────
   String myName = 'Saya';
   String myCity = '';
+
+  /// True setelah pengguna benar-benar mengisi namanya sendiri. Dipakai
+  /// membedakan "belum pernah ditanya" dari "kebetulan menamai diri Saya" —
+  /// tanpa ini, orang yang memilih "Lanjut tanpa grup" tidak pernah ditanya
+  /// nama sama sekali dan profilnya selamanya bertuliskan "Saya".
+  bool nameSet = false;
+
+  /// Simpan identitas yang diisi sendiri. [city] boleh kosong.
+  void setIdentity({required String name, String? city}) => set(() {
+        myName = name.trim();
+        if (city != null) myCity = city.trim().toUpperCase();
+        nameSet = true;
+        me.name = myName;
+      });
+
+  /// Berat & tinggi badan — acuan estimasi kalori dan BMI. Disimpan di [Body]
+  /// supaya [Activity.calories] bisa memakainya tanpa perlu akses [AppState].
+  double get bodyWeightKg => Body.weightKg;
+  set bodyWeightKg(double v) =>
+      Body.weightKg = v.clamp(Body.minWeightKg, Body.maxWeightKg);
+
+  double? get heightCm => Body.heightCm;
+  set heightCm(double? v) =>
+      Body.heightCm = v?.clamp(Body.minHeightCm, Body.maxHeightCm);
+
+  double? get bmi => Body.bmi;
+  String? get bmiLabel => Body.bmiLabel;
   DateTime joinedAt = DateTime.now();
   ThemeMode themeMode = ThemeMode.system;
   bool metric = true;
@@ -451,6 +555,11 @@ class AppState extends ChangeNotifier {
   void _restore(Map<String, dynamic> j) {
     myName = j['name'] as String? ?? myName;
     myCity = j['city'] as String? ?? '';
+    // Pemakai lama yang namanya sudah terisi lewat alur grup tidak perlu
+    // ditanya ulang hanya karena penanda ini baru ada.
+    nameSet = j['nameSet'] as bool? ?? (myName.isNotEmpty && myName != 'Saya');
+    bodyWeightKg = (j['wKg'] as num?)?.toDouble() ?? Body.defaultWeightKg;
+    heightCm = (j['hCm'] as num?)?.toDouble();
     joinedAt = j['joined'] == null
         ? joinedAt
         : DateTime.tryParse(j['joined'] as String) ?? joinedAt;
@@ -486,6 +595,9 @@ class AppState extends ChangeNotifier {
   Map<String, dynamic> _snapshot() => {
         'name': myName,
         'city': myCity,
+        'nameSet': nameSet,
+        'wKg': bodyWeightKg,
+        if (heightCm != null) 'hCm': heightCm,
         'joined': joinedAt.toIso8601String(),
         'theme': themeMode.name,
         'metric': metric,
@@ -840,26 +952,92 @@ class AppState extends ChangeNotifier {
   double get lifetimeKm => activities.fold(0.0, (s, a) => s + a.km);
 
   /// 4 bar "JARAK PER MINGGU".
+  /// Batang "JARAK PER MINGGU": tiap batang tepat 7 hari (1–7, 8–14, …).
+  ///
+  /// Dulu tanggal 29–31 dipaksa masuk batang ke-4, jadi batang itu mewakili 10
+  /// hari sementara sisanya 7 — tingginya tidak bisa dibandingkan. Sekarang
+  /// sisa hari dapat batangnya sendiri, panjangnya menyesuaikan bulan.
   List<double> get weeklyKm {
-    final out = List<double>.filled(4, 0);
+    final now = DateTime.now();
+    final hari = DateTime(now.year, now.month + 1, 0).day;
+    final out = List<double>.filled((hari / 7).ceil(), 0);
     for (final a in monthActivities) {
-      out[min(3, (a.startedAt.day - 1) ~/ 7)] += a.km;
+      out[(a.startedAt.day - 1) ~/ 7] += a.km;
     }
     return out;
   }
 
-  Map<Sport, double> get kmBySport {
+  /// Label untuk [weeklyKm], sepanjang jumlah batangnya.
+  List<String> get weeklyLabels =>
+      [for (var i = 0; i < weeklyKm.length; i++) 'M${i + 1}'];
+
+  /// Km per olahraga. [year] null → seumur hidup.
+  Map<Sport, double> kmBySport({int? year}) {
     final out = {for (final s in Sport.values) s: 0.0};
     for (final a in activities) {
+      if (year != null && a.startedAt.year != year) continue;
       out[a.sport] = out[a.sport]! + a.km;
     }
     return out;
   }
 
-  Activity? get fastest5k {
-    final c = activities.where((a) => a.distanceM >= 5000).toList()
-      ..sort((a, b) => a.avgPaceSecPerKm.compareTo(b.avgPaceSecPerKm));
-    return c.isEmpty ? null : c.first;
+  /// Aktivitas dikelompokkan per bulan, terbaru dulu — dipakai layar Riwayat
+  /// supaya rekaman bulan lalu tidak ikut hilang tiap ganti bulan.
+  List<(DateTime month, List<Activity> items)> get activitiesByMonth {
+    final buckets = <DateTime, List<Activity>>{};
+    for (final a in activities) {
+      buckets
+          .putIfAbsent(DateTime(a.startedAt.year, a.startedAt.month), () => [])
+          .add(a);
+    }
+    final keys = buckets.keys.toList()..sort((a, b) => b.compareTo(a));
+    return [
+      for (final k in keys)
+        (k, buckets[k]!..sort((a, b) => b.startedAt.compareTo(a.startedAt))),
+    ];
+  }
+
+  /// Waktu 5 km tercepat yang **benar-benar ditempuh**, dalam detik.
+  ///
+  /// Dulu ini `pace rata-rata × 5` dari aktivitas mana pun ≥5 km — angka yang
+  /// tidak pernah sungguh dicatat: lari 20 km santai 5:00/km dilaporkan
+  /// sebagai "5K 25:00". Sekarang dicari jendela 5 km tercepat di sepanjang
+  /// jejak, jadi rekornya memang pernah terjadi.
+  int? get best5kSec {
+    int? best;
+    for (final a in activities) {
+      final t = best5kOf(a);
+      if (t != null && (best == null || t < best)) best = t;
+    }
+    return best;
+  }
+
+  /// Jendela 5 km tercepat di satu aktivitas, null kalau jejaknya tidak cukup.
+  static int? best5kOf(Activity a) {
+    final pts = a.track;
+    final secs = a.secs;
+    if (pts.length < 2 || secs.length != pts.length) return null;
+
+    // Jarak kumulatif tiap titik, supaya jendela bisa digeser tanpa menghitung
+    // ulang jarak dari awal setiap kali.
+    final cum = List<double>.filled(pts.length, 0);
+    for (var i = 1; i < pts.length; i++) {
+      cum[i] = cum[i - 1] + dist.as(LengthUnit.Meter, pts[i - 1], pts[i]);
+    }
+    if (cum.last < 5000) return null;
+
+    int? best;
+    var j = 0;
+    for (var i = 0; i < pts.length; i++) {
+      if (j < i) j = i;
+      while (j < pts.length - 1 && cum[j] - cum[i] < 5000) {
+        j++;
+      }
+      if (cum[j] - cum[i] < 5000) break;
+      final t = secs[j] - secs[i];
+      if (t > 0 && (best == null || t < best)) best = t;
+    }
+    return best;
   }
 
   Activity? get longest => activities.isEmpty
@@ -1148,7 +1326,7 @@ class RecordSession extends ChangeNotifier {
   double get avgSpeedKmh => track.avgKmh;
   double get elevGainM => track.elevGainM;
   int get paceSecPerKm => distanceM < 50 ? 0 : (movingSec / km).floor();
-  int get calories => (sport.kcalPerKm * km * kBodyWeightKg).round();
+  int get calories => estimateKcal(sport, km, elevGainM);
   double get splitProgress => km - km.floorToDouble();
   List<KmSplit> get splits =>
       [for (final s in track.splits) KmSplit(s.$1, s.$2)];

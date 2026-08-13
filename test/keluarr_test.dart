@@ -149,8 +149,236 @@ void main() {
     final month = app.monthActivities;
     expect(month, isNotEmpty);
     expect(app.monthKm, closeTo(month.fold(0.0, (s, a) => s + a.km), 0.001));
-    expect(app.weeklyKm.length, 4);
+    // Jumlah batang mengikuti panjang bulan (4 atau 5), bukan dipatok 4.
+    expect(app.weeklyKm.length, inInclusiveRange(4, 5));
     expect(app.weeklyKm.reduce((a, b) => a + b), closeTo(app.monthKm, 0.001));
+  });
+
+  group('logika metrik', () {
+    test('kalori hiking memperhitungkan tanjakan, bukan cuma jarak', () {
+      final datar = estimateKcal(Sport.hike, 8.4, 0);
+      final nanjak = estimateKcal(Sport.hike, 8.4, 742);
+      expect(nanjak, greaterThan(datar));
+      // m·g·h / (0,25 efisiensi · 4184 J/kkal) ≈ 70 · 742 · 0,0094 ≈ 488 kkal.
+      expect(nanjak - datar, closeTo(488, 15));
+    });
+
+    test('elevasi turun tidak mengurangi kalori', () {
+      expect(estimateKcal(Sport.run, 5, -300), estimateKcal(Sport.run, 5, 0));
+    });
+
+    test('kalori mengacu berat badan di profil, bukan angka hardcode', () {
+      final app = AppState();
+      addTearDown(app.dispose);
+      final a = Activity(
+          id: 'x',
+          sport: Sport.run,
+          title: 'x',
+          startedAt: DateTime(2026, 8, 1),
+          distanceM: 10000,
+          movingSec: 3000);
+
+      final default70 = a.calories;
+      app.bodyWeightKg = 90;
+      expect(a.calories, greaterThan(default70));
+      expect(a.calories / default70, closeTo(90 / 70, 0.01));
+    });
+
+    test('berat & tinggi dijaga di rentang wajar', () {
+      final app = AppState();
+      addTearDown(app.dispose);
+      app.bodyWeightKg = 700; // salah ketik
+      expect(app.bodyWeightKg, Body.maxWeightKg);
+      app.bodyWeightKg = 1;
+      expect(app.bodyWeightKg, Body.minWeightKg);
+      app.heightCm = 5;
+      expect(app.heightCm, Body.minHeightCm);
+    });
+
+    test('BMI hanya muncul kalau tinggi diisi', () {
+      final app = AppState();
+      addTearDown(app.dispose);
+      expect(app.bmi, isNull);
+      expect(app.bmiLabel, isNull);
+
+      app
+        ..bodyWeightKg = 70
+        ..heightCm = 175;
+      expect(app.bmi, closeTo(22.86, 0.01));
+      expect(app.bmiLabel, 'NORMAL');
+    });
+
+    test('berat & tinggi ikut tersimpan dan dipulihkan', () async {
+      final store = _MemStore();
+      final asal = AppState(store: store);
+      addTearDown(asal.dispose);
+      asal.set(() {
+        asal
+          ..bodyWeightKg = 62.5
+          ..heightCm = 168;
+      });
+      await asal.flush();
+
+      final lagi = AppState(store: store);
+      addTearDown(lagi.dispose);
+      await lagi.boot();
+
+      expect(lagi.bodyWeightKg, 62.5);
+      expect(lagi.heightCm, 168);
+    });
+
+    test('5K tercepat diambil dari jendela nyata, bukan pace rata-rata', () {
+      // 10 km lurus: 5 km pertama lambat (1500 dtk), 5 km kedua cepat (900 dtk).
+      // Pace rata-rata × 5 = 1200 dtk — angka yang tidak pernah ditempuh.
+      final pts = <LatLng>[];
+      final secs = <int>[];
+      for (var i = 0; i <= 100; i++) {
+        pts.add(LatLng(-6.2 + i * 0.000899, 106.8)); // ~100 m per langkah
+        secs.add(i <= 50 ? i * 30 : 1500 + (i - 50) * 18);
+      }
+      final a = Activity(
+          id: 'x',
+          sport: Sport.run,
+          title: 'x',
+          startedAt: DateTime(2026, 8, 1),
+          distanceM: 10000,
+          movingSec: 2400,
+          track: pts,
+          secs: secs);
+
+      final best = AppState.best5kOf(a);
+      expect(best, isNotNull);
+      expect(best, closeTo(900, 60), reason: 'harus menemukan paruh cepatnya');
+      expect(best, lessThan(1200), reason: 'lebih baik dari pace rata-rata × 5');
+    });
+
+    test('aktivitas tanpa jejak cukup tidak mengarang rekor 5K', () {
+      final a = Activity(
+          id: 'y',
+          sport: Sport.run,
+          title: 'y',
+          startedAt: DateTime(2026, 8, 1),
+          distanceM: 8000,
+          movingSec: 2400);
+      expect(AppState.best5kOf(a), isNull);
+    });
+
+    test('batang mingguan: tiap batang 7 hari, sisa hari dapat batang sendiri', () {
+      final app = AppState();
+      addTearDown(app.dispose);
+      final now = DateTime.now();
+      final hari = DateTime(now.year, now.month + 1, 0).day;
+
+      expect(app.weeklyKm.length, (hari / 7).ceil());
+      expect(app.weeklyLabels.length, app.weeklyKm.length);
+    });
+
+    test('warna anggota stabil, tidak bergantung String.hashCode', () {
+      final a = Member(uid: 'abc123', name: 'A');
+      final b = Member(uid: 'abc123', name: 'B');
+      expect(a.color, b.color);
+      // Nilainya ditentukan FNV-1a, jadi tetap sama lintas versi Dart SDK.
+      expect(Member(uid: 'zzz', name: 'Z').color,
+          Member(uid: 'zzz', name: 'Lain').color);
+    });
+  });
+
+  group('identitas awal', () {
+    test('app baru belum punya nama, jadi sambutan ditampilkan', () {
+      final app = AppState();
+      addTearDown(app.dispose);
+      expect(app.nameSet, isFalse);
+      expect(app.myName, 'Saya');
+    });
+
+    test('setIdentity menyimpan nama, kota kapital, dan menyetel penanda', () {
+      final app = AppState();
+      addTearDown(app.dispose);
+      app.setIdentity(name: '  Ari Ramdani ', city: ' tangerang ');
+      expect(app.myName, 'Ari Ramdani');
+      expect(app.myCity, 'TANGERANG');
+      expect(app.nameSet, isTrue);
+      expect(app.me.name, 'Ari Ramdani', reason: 'baris roster ikut disamakan');
+    });
+
+    test('kota boleh dilewati', () {
+      final app = AppState();
+      addTearDown(app.dispose);
+      app.setIdentity(name: 'Budi');
+      expect(app.myCity, isEmpty);
+      expect(app.nameSet, isTrue);
+    });
+
+    test('nama & kota bertahan setelah app dibuka lagi', () async {
+      final store = _MemStore();
+      final asal = AppState(store: store);
+      addTearDown(asal.dispose);
+      asal.setIdentity(name: 'Ari', city: 'Bandung');
+      await asal.flush();
+
+      final lagi = AppState(store: store);
+      addTearDown(lagi.dispose);
+      await lagi.boot();
+
+      expect(lagi.myName, 'Ari');
+      expect(lagi.myCity, 'BANDUNG');
+      expect(lagi.nameSet, isTrue, reason: 'tidak ditanya ulang');
+    });
+
+    test('pemakai lama yang sudah punya nama tidak ditanya ulang', () async {
+      // Simpanan dari versi sebelum penanda `nameSet` ada.
+      final store = _MemStore()..last = {'name': 'Ari Lama'};
+      final app = AppState(store: store);
+      addTearDown(app.dispose);
+      await app.boot();
+
+      expect(app.nameSet, isTrue);
+      expect(app.myName, 'Ari Lama');
+    });
+  });
+
+  group('riwayat lengkap di Profil', () {
+    Activity act(String id, DateTime kapan, Sport s, double km) => Activity(
+          id: id,
+          sport: s,
+          title: id,
+          startedAt: kapan,
+          distanceM: km * 1000,
+          movingSec: 600,
+        );
+
+    test('dikelompokkan per bulan, terbaru dulu, tidak ada yang hilang', () {
+      final app = AppState();
+      addTearDown(app.dispose);
+      app.activities.addAll([
+        act('a', DateTime(2026, 8, 3), Sport.run, 5),
+        act('b', DateTime(2026, 8, 20), Sport.bike, 20),
+        act('c', DateTime(2026, 6, 9), Sport.run, 7),
+        act('d', DateTime(2025, 12, 1), Sport.hike, 9),
+      ]);
+
+      final byMonth = app.activitiesByMonth;
+
+      expect(byMonth.map((e) => e.$1).toList(),
+          [DateTime(2026, 8), DateTime(2026, 6), DateTime(2025, 12)]);
+      // Dalam satu bulan juga terbaru dulu.
+      expect(byMonth.first.$2.map((a) => a.id).toList(), ['b', 'a']);
+      // Semua aktivitas ikut, tidak ada yang tersaring hilang.
+      expect(byMonth.fold(0, (s, e) => s + e.$2.length), app.activities.length);
+    });
+
+    test('kmBySport bisa dibatasi per tahun — label Profil tidak lagi bohong', () {
+      final app = AppState();
+      addTearDown(app.dispose);
+      app.activities.addAll([
+        act('a', DateTime(2026, 8, 3), Sport.run, 5),
+        act('b', DateTime(2025, 8, 3), Sport.run, 100),
+      ]);
+
+      expect(app.kmBySport(year: 2026)[Sport.run], closeTo(5, 0.001));
+      expect(app.kmBySport()[Sport.run], closeTo(105, 0.001),
+          reason: 'tanpa year tetap seumur hidup');
+    });
   });
 
   test('tanpa Firebase: app tetap punya diri sendiri, grup jadi lokal', () async {

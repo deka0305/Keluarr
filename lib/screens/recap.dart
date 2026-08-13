@@ -93,7 +93,7 @@ class _RecapScreenState extends State<RecapScreen> {
             const SizedBox(height: 11),
             Bars(
                 values: app.weeklyKm,
-                labels: const ['M1', 'M2', 'M3', 'M4'],
+                labels: app.weeklyLabels,
                 height: 52),
           ],
         ),
@@ -107,7 +107,7 @@ class _RecapScreenState extends State<RecapScreen> {
               style: TextStyle(fontSize: 13, color: context.dim)),
         ),
       for (final a in month) ...[
-        _ActivityCard(a, onChanged: () => setState(() {})),
+        ActivityCard(a, onChanged: () => setState(() {})),
         const SizedBox(height: 10),
       ],
     ];
@@ -258,8 +258,8 @@ class _BoardRow extends StatelessWidget {
 }
 
 /// Kartu riwayat. Swipe kiri → hapus, swipe kanan → bagikan.
-class _ActivityCard extends StatelessWidget {
-  const _ActivityCard(this.a, {required this.onChanged});
+class ActivityCard extends StatelessWidget {
+  const ActivityCard(this.a, {super.key, required this.onChanged});
 
   final Activity a;
   final VoidCallback onChanged;

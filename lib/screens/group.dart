@@ -54,7 +54,9 @@ class GroupScreen extends StatelessWidget {
                 filled: true,
                 onTap: () => Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const CreateGroupScreen()),
+                  MaterialPageRoute(
+                      builder: (_) => CreateGroupScreen(
+                          initialName: app.myName == 'Saya' ? '' : app.myName)),
                 ),
               ),
             ),
@@ -132,10 +134,10 @@ class GroupScreen extends StatelessWidget {
                                 vertical: 8,
                               ),
                               decoration: BoxDecoration(
-                                color: grp.code == g?.code
+                                color: grp.code == g.code
                                     ? K.orange
                                     : context.card,
-                                border: grp.code == g?.code
+                                border: grp.code == g.code
                                     ? null
                                     : Border.all(color: context.line),
                                 borderRadius: BorderRadius.circular(8),
@@ -145,7 +147,7 @@ class GroupScreen extends StatelessWidget {
                                 style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
-                                  color: grp.code == g?.code
+                                  color: grp.code == g.code
                                       ? Colors.white
                                       : context.fg,
                                 ),
@@ -322,7 +324,9 @@ class GroupScreen extends StatelessWidget {
                     onTap: () => _confirm(
                       context,
                       'Keluar dari ${g.name}?',
-                      'Grup akan terhapus kalau tidak ada admin pengganti.',
+                      'Anggota lain tidak bisa mengelola grup ini sampai ada '
+                      'admin lagi. Kamu bisa masuk kembali kapan saja lewat '
+                      '"Grup yang pernah kamu buat" di tab Grup.',
                       () => app.leaveGroup(groupCode: g.code),
                     ),
                   ),

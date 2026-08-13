@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -990,5 +992,59 @@ class PrivacyNote extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// Menggeser kamera peta ke posisi baru secara halus, dan **memiliki** timernya.
+///
+/// Dulu tiap layar peta memanggil `Timer.periodic` sendiri langsung dari
+/// `build()` tanpa menyimpannya. Akibatnya fix GPS yang datang lebih rapat dari
+/// durasi animasi (sering saat bersepeda) membuat beberapa timer hidup
+/// bersamaan, masing-masing beranjak dari titik awal berbeda dan sama-sama
+/// memanggil `move()` tiap 40 ms — kameranya bergetar dan tarik-menarik.
+///
+/// Di sini animasi baru selalu membatalkan yang lama, dan [dispose] menutup
+/// timer beserta controllernya.
+class MapFollower {
+  MapFollower(this.controller);
+
+  final MapController controller;
+  Timer? _timer;
+  LatLng? _lastTarget;
+
+  static const _frame = Duration(milliseconds: 40);
+  static const _durasiMs = 400;
+
+  /// Geser ke [target]. Diam saja kalau tujuannya sama dengan yang terakhir,
+  /// supaya rebuild biasa tidak memicu animasi baru.
+  void follow(LatLng target, {double? zoom, bool force = false}) {
+    if (!force && target == _lastTarget) return;
+    _lastTarget = target;
+    _timer?.cancel();
+
+    final from = controller.camera.center;
+    var step = 0;
+    _timer = Timer.periodic(_frame, (t) {
+      step++;
+      final pct = (step * _frame.inMilliseconds / _durasiMs).clamp(0.0, 1.0);
+      controller.move(
+        LatLng(
+          from.latitude + (target.latitude - from.latitude) * pct,
+          from.longitude + (target.longitude - from.longitude) * pct,
+        ),
+        zoom ?? controller.camera.zoom,
+      );
+      if (pct >= 1.0) t.cancel();
+    });
+  }
+
+  /// Batalkan animasi yang sedang jalan — dipakai saat pengguna menggeser peta
+  /// sendiri, supaya kamera tidak direbut kembali.
+  void stop() => _timer?.cancel();
+
+  void dispose() {
+    _timer?.cancel();
+    _timer = null;
+    controller.dispose();
   }
 }

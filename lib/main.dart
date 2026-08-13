@@ -110,13 +110,16 @@ class _Splash extends StatelessWidget {
       );
 }
 
-/// START · ada grup aktif ? ya → PETA · tidak → onboarding (01)
+/// START · belum punya nama ? → sambutan (00) · ada grup aktif ? ya → PETA ·
+/// tidak → onboarding (01)
 class Root extends StatelessWidget {
   const Root({super.key});
 
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
+    // Nama ditanya sekali di awal, terlepas dari jalur grup mana yang dipilih.
+    if (!app.nameSet) return const WelcomeScreen();
     if (app.activeGroup == null && !app.skippedGroup) return const OnboardingScreen();
     return const HomeShell();
   }

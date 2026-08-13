@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../state.dart';
 import '../theme.dart';
 import '../widgets.dart';
+import 'recap.dart';
 import 'share.dart';
 
 /// 18 · PROFIL & STATISTIK
@@ -17,9 +18,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    final bySport = app.kmBySport;
+    final tahun = DateTime.now().year;
+    final bySport = app.kmBySport(year: tahun);
     final maxSport = bySport.values.fold(0.0, (a, b) => a > b ? a : b);
-    final fast = app.fastest5k;
+    final fast = app.best5kSec;
     final far = app.longest;
 
     return Scaffold(
@@ -37,7 +39,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   children: [
                     Text(app.myName, style: Theme.of(context).textTheme.titleLarge),
                     Mono(
-                        '${app.myCity} · GABUNG ${fmtMonthYear(app.joinedAt)}',
+                        [
+                          if (app.myCity.isNotEmpty) app.myCity,
+                          'GABUNG ${fmtMonthYear(app.joinedAt)}',
+                        ].join(' · '),
                         size: 10.5),
                   ],
                 ),
@@ -75,11 +80,55 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
           const SizedBox(height: K.gap),
+          InkWell(
+            onTap: _editBody,
+            borderRadius: BorderRadius.circular(K.r),
+            child: Panel(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(child: L('DATA TUBUH')),
+                      Icon(Icons.edit_outlined, size: 15, color: context.dim),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                          child: _Record(
+                              'BERAT', '${num1(app.bodyWeightKg)} kg')),
+                      const SizedBox(width: 10),
+                      Expanded(
+                          child: _Record(
+                              'TINGGI',
+                              app.heightCm == null
+                                  ? '—'
+                                  : '${app.heightCm!.round()} cm')),
+                      const SizedBox(width: 10),
+                      Expanded(
+                          child: _Record(
+                              app.bmiLabel == null ? 'BMI' : 'BMI · ${app.bmiLabel}',
+                              app.bmi == null ? '—' : num1(app.bmi!))),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                      app.heightCm == null
+                          ? 'Berat dipakai menghitung kalori. Isi tinggi kalau mau lihat BMI.'
+                          : 'Berat dipakai menghitung kalori semua aktivitas.',
+                      style: TextStyle(fontSize: 11.5, color: context.dim)),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: K.gap),
           Panel(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                L('PER OLAHRAGA · ${DateTime.now().year}'),
+                L('PER OLAHRAGA · $tahun'),
                 const SizedBox(height: 12),
                 for (final s in Sport.values)
                   Padding(
@@ -126,8 +175,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 Row(
                   children: [
                     Expanded(
-                      child: _Record('5K TERCEPAT',
-                          fast == null ? '—' : fmtClock(fast.avgPaceSecPerKm * 5)),
+                      child: _Record(
+                          '5K TERCEPAT', fast == null ? '—' : fmtClock(fast)),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
@@ -140,6 +189,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ],
                 ),
               ],
+            ),
+          ),
+          const SizedBox(height: K.gap),
+          Panel(
+            padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 2),
+            child: MenuRow(
+              'Riwayat aktivitas',
+              icon: Icons.history,
+              trailing: '${app.activities.length}',
+              divider: false,
+              onTap: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const HistoryScreen())),
             ),
           ),
           const SizedBox(height: K.gap),
@@ -171,14 +232,87 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Future<void> _editName() async {
+  /// Berat wajib (kalori bergantung padanya), tinggi opsional — kalau
+  /// dikosongkan BMI tidak ditampilkan, bukan ditebak dari angka default.
+  Future<void> _editBody() async {
     final app = AppScope.of(context);
-    final ctrl = TextEditingController(text: app.myName);
+    final berat = TextEditingController(text: num1(app.bodyWeightKg));
+    final tinggi = TextEditingController(
+        text: app.heightCm == null ? '' : app.heightCm!.round().toString());
+
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Ubah nama'),
-        content: TextField(controller: ctrl, autofocus: true),
+        title: const Text('Data tubuh'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: berat,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                  labelText: 'Berat badan', suffixText: 'kg'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: tinggi,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                  labelText: 'Tinggi badan (opsional)', suffixText: 'cm'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Batal')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Simpan')),
+        ],
+      ),
+    );
+
+    if (ok == true) {
+      // Koma desimal gaya Indonesia ikut diterima.
+      final w = double.tryParse(berat.text.trim().replaceAll(',', '.'));
+      final h = double.tryParse(tinggi.text.trim().replaceAll(',', '.'));
+      app.set(() {
+        if (w != null && w > 0) app.bodyWeightKg = w;
+        app.heightCm = h != null && h > 0 ? h : null;
+      });
+    }
+    berat.dispose();
+    tinggi.dispose();
+  }
+
+  Future<void> _editName() async {
+    final app = AppScope.of(context);
+    final nama = TextEditingController(text: app.myName);
+    final kota = TextEditingController(text: app.myCity);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Ubah profil'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nama,
+              autofocus: true,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'Nama'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: kota,
+              textCapitalization: TextCapitalization.words,
+              decoration:
+                  const InputDecoration(labelText: 'Kota (opsional)'),
+            ),
+          ],
+        ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false), child: const Text('Batal')),
@@ -187,10 +321,99 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ],
       ),
     );
-    if (ok == true && ctrl.text.trim().isNotEmpty) {
-      app.set(() => app.myName = ctrl.text.trim());
+    if (ok == true && nama.text.trim().isNotEmpty) {
+      app.setIdentity(name: nama.text, city: kota.text);
     }
-    ctrl.dispose();
+    nama.dispose();
+    kota.dispose();
+  }
+}
+
+/// Riwayat lengkap, dikelompokkan per bulan. Rekap sengaja hanya menampilkan
+/// bulan berjalan; tanpa layar ini rekaman bulan lalu tidak bisa dilihat lagi
+/// begitu tanggal berganti, padahal datanya utuh tersimpan.
+class HistoryScreen extends StatefulWidget {
+  const HistoryScreen({super.key});
+
+  @override
+  State<HistoryScreen> createState() => _HistoryScreenState();
+}
+
+class _HistoryScreenState extends State<HistoryScreen> {
+  Sport? _filter;
+
+  @override
+  Widget build(BuildContext context) {
+    final app = AppScope.of(context);
+    final months = [
+      for (final (m, items) in app.activitiesByMonth)
+        (m, _filter == null ? items : items.where((a) => a.sport == _filter).toList()),
+    ].where((e) => e.$2.isNotEmpty).toList();
+    final total = months.fold(0, (s, e) => s + e.$2.length);
+
+    return Scaffold(
+      appBar: backBar(context, 'Riwayat aktivitas'),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(K.pad, 8, K.pad, 20),
+        children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                Pill('SEMUA ${app.activities.length}',
+                    size: 10,
+                    selected: _filter == null,
+                    selectedColor: K.orange,
+                    onTap: () => setState(() => _filter = null)),
+                for (final s in Sport.values) ...[
+                  const SizedBox(width: 8),
+                  Pill(
+                      '${s.label.split(' ').first.toUpperCase()} '
+                      '${app.activities.where((a) => a.sport == s).length}',
+                      size: 10,
+                      selected: _filter == s,
+                      selectedColor: K.orange,
+                      onTap: () => setState(() => _filter = s)),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (months.isEmpty)
+            Panel(
+              child: Text(
+                  _filter == null
+                      ? 'Belum ada aktivitas tersimpan. Mulai rekam dari tab REKAM.'
+                      : 'Belum ada aktivitas ${_filter!.label.toLowerCase()}.',
+                  style: TextStyle(fontSize: 13, color: context.dim)),
+            )
+          else
+            for (final (bulan, items) in months) ...[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  L(fmtMonthYear(bulan)),
+                  Mono(
+                      '${fmtKm(items.fold(0.0, (s, a) => s + a.km))} km · ${items.length}',
+                      size: 10),
+                ],
+              ),
+              const SizedBox(height: 10),
+              for (final a in items) ...[
+                ActivityCard(a, onChanged: () => setState(() {})),
+                const SizedBox(height: 10),
+              ],
+              const SizedBox(height: 6),
+            ],
+          if (total > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text('$total aktivitas · tersimpan di perangkat ini saja.',
+                  style: TextStyle(fontSize: 11.5, color: context.dim)),
+            ),
+        ],
+      ),
+    );
   }
 }
 

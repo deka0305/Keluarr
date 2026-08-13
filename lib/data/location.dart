@@ -172,11 +172,33 @@ class Gps {
     return meters / secs <= _maxSpeedMps;
   }
 
+  /// Kecepatan fix dalam km/j.
+  ///
+  /// Tidak semua perangkat mengisi `speed` — fix dari fused/network provider
+  /// tanpa lock GNSS sering mengembalikan 0. Kalau angka itu dipercaya apa
+  /// adanya, seluruh deteksi gerak membaca "diam": auto-pause menyala setelah
+  /// 20 detik lalu **tidak pernah lepas**, karena syarat lanjutnya juga
+  /// kecepatan. Jarak dan jejak berhenti untuk sisa sesi.
+  ///
+  /// Jadi kalau perangkat diam soal kecepatan, turunkan sendiri dari jarak dan
+  /// selisih waktu antar-fix — datanya memang sudah ada di tangan.
+  @visibleForTesting
+  static double speedKmh(Position? prev, Position pos) {
+    if (pos.speed.isFinite && pos.speed > 0) return pos.speed * 3.6;
+    if (prev == null) return 0;
+    final secs = pos.timestamp.difference(prev.timestamp).inMilliseconds / 1000;
+    if (secs <= 0) return 0;
+    final meters = Geolocator.distanceBetween(
+        prev.latitude, prev.longitude, pos.latitude, pos.longitude);
+    return meters / secs * 3.6;
+  }
+
   void _onFix(Position pos) {
     if (!plausible(_lastGood, pos)) return;
+    final prev = _lastGood;
     _lastGood = pos;
     final at = LatLng(pos.latitude, pos.longitude);
-    final kmh = pos.speed.isFinite && pos.speed > 0 ? pos.speed * 3.6 : 0.0;
+    final kmh = speedKmh(prev, pos);
     if (pos.heading.isFinite) _lastHeading = pos.heading;
 
     // Jejak dicatat lebih dulu dan tanpa syarat: itu milik pengguna sendiri.

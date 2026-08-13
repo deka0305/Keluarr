@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
 
 import '../state.dart';
 import '../theme.dart';
@@ -226,26 +225,18 @@ class _ActiveView extends StatefulWidget {
 
 class _ActiveViewState extends State<_ActiveView> {
   final _map = MapController();
-  LatLng? _lastFollowed;
+  late final _follower = MapFollower(_map);
+
+  @override
+  void dispose() {
+    _follower.dispose();
+    super.dispose();
+  }
 
   void _autoFollow(AppState app) {
     final pos = app.myPos;
-    if (pos == null || pos == _lastFollowed) return;
-    _lastFollowed = pos;
-    final oldPos = _map.camera.center;
-    var step = 0;
-    Timer.periodic(const Duration(milliseconds: 40), (t) {
-      if (!mounted) {
-        t.cancel();
-        return;
-      }
-      step++;
-      final pct = (step * 40 / 400).clamp(0.0, 1.0);
-      final lat = oldPos.latitude + (pos.latitude - oldPos.latitude) * pct;
-      final lng = oldPos.longitude + (pos.longitude - oldPos.longitude) * pct;
-      _map.move(LatLng(lat, lng), 16);
-      if (pct >= 1.0) t.cancel();
-    });
+    if (pos == null) return;
+    _follower.follow(pos, zoom: 16);
   }
 
   @override
@@ -336,21 +327,7 @@ class _ActiveViewState extends State<_ActiveView> {
                           await app.gps.start();
                         }
                         if (mounted && app.myPos != null) {
-                          final oldPos = _map.camera.center;
-                          final pos = app.myPos!;
-                          var step = 0;
-                          Timer.periodic(const Duration(milliseconds: 40), (t) {
-                            if (!mounted) {
-                              t.cancel();
-                              return;
-                            }
-                            step++;
-                            final pct = (step * 40 / 400).clamp(0.0, 1.0);
-                            final lat = oldPos.latitude + (pos.latitude - oldPos.latitude) * pct;
-                            final lng = oldPos.longitude + (pos.longitude - oldPos.longitude) * pct;
-                            _map.move(LatLng(lat, lng), 16);
-                            if (pct >= 1.0) t.cancel();
-                          });
+                          _follower.follow(app.myPos!, zoom: 16, force: true);
                         }
                       },
                       borderRadius: BorderRadius.circular(10),

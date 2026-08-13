@@ -5,6 +5,127 @@ import '../state.dart';
 import '../theme.dart';
 import '../widgets.dart';
 
+/// 00 · SAMBUTAN · ISI NAMA (sekali saja, saat app baru dipasang)
+///
+/// Sebelum ini nama hanya ditanya di alur buat/gabung grup, jadi siapa pun yang
+/// memilih "Lanjut tanpa grup" tidak pernah ditanya — profilnya selamanya
+/// bertuliskan "Saya".
+class WelcomeScreen extends StatefulWidget {
+  const WelcomeScreen({super.key});
+
+  @override
+  State<WelcomeScreen> createState() => _WelcomeScreenState();
+}
+
+class _WelcomeScreenState extends State<WelcomeScreen> {
+  final _name = TextEditingController();
+  final _city = TextEditingController();
+
+  bool get _ok => _name.text.trim().isNotEmpty;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _city.dispose();
+    super.dispose();
+  }
+
+  InputDecoration _deco(BuildContext context, String hint) => InputDecoration(
+        hintText: hint,
+        filled: true,
+        fillColor: context.card,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: context.line),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: K.orange, width: 2),
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final app = AppScope.of(context);
+    return Scaffold(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(22, 26, 22, 18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                    color: K.orange, borderRadius: BorderRadius.circular(17)),
+                child: const Text('KL',
+                    style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        letterSpacing: -.5)),
+              ),
+              const SizedBox(height: 28),
+              Text('Halo! Siapa\nnama kamu?',
+                  style: Theme.of(context).textTheme.headlineLarge),
+              const SizedBox(height: 12),
+              Text(
+                  'Dipakai di profil kamu, dan jadi nama yang dilihat anggota '
+                  'grup nanti. Bisa diubah kapan saja lewat Profil.',
+                  style: TextStyle(fontSize: 14.5, height: 1.55, color: context.dim)),
+              const SizedBox(height: 26),
+              const L('NAMA'),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _name,
+                autofocus: true,
+                textCapitalization: TextCapitalization.words,
+                onChanged: (_) => setState(() {}),
+                style: TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600, color: context.fg),
+                decoration: _deco(context, 'Masukkan nama kamu'),
+              ),
+              const SizedBox(height: 20),
+              const L('KOTA · OPSIONAL'),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _city,
+                textCapitalization: TextCapitalization.words,
+                style: TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600, color: context.fg),
+                decoration: _deco(context, 'Misal: Tangerang'),
+              ),
+              const Spacer(),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.shield_outlined, size: 15, color: K.success),
+                    const SizedBox(width: 8),
+                    Text('DISIMPAN DI HP INI SAJA',
+                        style: mono(10, color: const Color(0xFF4C8F6E), track: .8)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              BigBtn('Lanjut',
+                  color: _ok ? null : context.line,
+                  onTap: _ok
+                      ? () => app.setIdentity(
+                          name: _name.text, city: _city.text)
+                      : null),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 01 · ONBOARDING / GABUNG GRUP
 class OnboardingScreen extends StatelessWidget {
   const OnboardingScreen({super.key});
@@ -63,8 +184,12 @@ class OnboardingScreen extends StatelessWidget {
                       icon: Icons.add,
                       label: 'Buat grup',
                       filled: true,
-                      onTap: () => Navigator.push(context,
-                          MaterialPageRoute(builder: (_) => const CreateGroupScreen())),
+                      onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => CreateGroupScreen(
+                                  initialName:
+                                      app.myName == 'Saya' ? '' : app.myName))),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -200,19 +325,25 @@ class _BigTile extends StatelessWidget {
 
 /// 02 · BUAT GRUP
 class CreateGroupScreen extends StatefulWidget {
-  const CreateGroupScreen({super.key});
+  const CreateGroupScreen({super.key, this.initialName = ''});
+
+  /// Nama yang sudah pernah diisi pengguna, supaya bikin grup kedua tidak
+  /// menimpanya jadi kosong lagi.
+  final String initialName;
 
   @override
   State<CreateGroupScreen> createState() => _CreateGroupScreenState();
 }
 
 class _CreateGroupScreenState extends State<CreateGroupScreen> {
-  final _myName = TextEditingController();
+  late final _myName = TextEditingController(text: widget.initialName);
   final _groupName = TextEditingController(text: 'Keluarr Pagi');
   Sport _sport = Sport.run;
   bool _loc = true;
   bool _status = true;
   bool _busy = false;
+
+  bool get _nameOk => _myName.text.trim().isNotEmpty;
 
   @override
   void dispose() {
@@ -240,6 +371,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                     const SizedBox(height: 8),
                     TextField(
                       controller: _myName,
+                      onChanged: (_) => setState(() {}),
                       style: TextStyle(
                           fontSize: 16, fontWeight: FontWeight.w600, color: context.fg),
                       decoration: InputDecoration(
@@ -258,6 +390,12 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                         ),
                       ),
                     ),
+                    if (!_nameOk)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text('Anggota lain melihat nama ini di grup.',
+                            style: TextStyle(fontSize: 11.5, color: context.dim)),
+                      ),
                     const SizedBox(height: 20),
                     const L('NAMA GRUP'),
                     const SizedBox(height: 8),
@@ -351,11 +489,12 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
               ),
               const SizedBox(height: 14),
               BigBtn(_busy ? 'Membuat…' : 'Buat grup',
-                  onTap: _busy
+                  color: _nameOk ? null : context.line,
+                  onTap: _busy || !_nameOk
                       ? null
                       : () async {
                           setState(() => _busy = true);
-                          app.myName = _myName.text.trim().isEmpty ? 'Saya' : _myName.text.trim();
+                          app.setIdentity(name: _myName.text);
                           app.shareLiveLocation = _loc;
                           app.shareStatus = _status;
                           await app.createGroup(_groupName.text, _sport);
@@ -465,7 +604,7 @@ class _JoinGroupScreenState extends State<JoinGroupScreen> {
       _busy = true;
       _error = null;
     });
-    app.myName = _myName.text.trim();
+    app.setIdentity(name: _myName.text);
     final err = await app.joinGroup(_code);
     if (!mounted) return;
     setState(() {

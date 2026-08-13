@@ -1,8 +1,6 @@
-import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart' hide Path;
 
 import '../state.dart';
 import '../theme.dart';
@@ -21,12 +19,18 @@ class MapScreen extends StatefulWidget {
 
 class _MapScreenState extends State<MapScreen> {
   final _map = MapController();
+  late final _follower = MapFollower(_map);
 
   /// FAB oranye: tampilkan/sembunyikan jejak pribadi (hanya di device ini).
   bool _showTrail = true;
   double _sheet = 1; // 0 = tertutup, 1 = ringkas, 2 = penuh
   bool _follow = true;
-  LatLng? _lastFollowed;
+
+  @override
+  void dispose() {
+    _follower.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -172,22 +176,8 @@ class _MapScreenState extends State<MapScreen> {
   /// Ikuti posisiku selama pengguna belum menggeser peta sendiri.
   void _autoFollow(AppState app) {
     final pos = app.myPos;
-    if (!_follow || pos == null || pos == _lastFollowed) return;
-    _lastFollowed = pos;
-    final oldPos = _map.camera.center;
-    var step = 0;
-    Timer.periodic(const Duration(milliseconds: 40), (t) {
-      if (!mounted || !_follow) {
-        t.cancel();
-        return;
-      }
-      step++;
-      final pct = (step * 40 / 400).clamp(0.0, 1.0);
-      final lat = oldPos.latitude + (pos.latitude - oldPos.latitude) * pct;
-      final lng = oldPos.longitude + (pos.longitude - oldPos.longitude) * pct;
-      _map.move(LatLng(lat, lng), _map.camera.zoom);
-      if (pct >= 1.0) t.cancel();
-    });
+    if (!_follow || pos == null) return;
+    _follower.follow(pos);
   }
 
   void _fitGroup(AppState app) {
@@ -196,6 +186,7 @@ class _MapScreenState extends State<MapScreen> {
         if (m.at != null) m.at!,
     ];
     if (pts.isEmpty) return;
+    _follower.stop();
     setState(() => _follow = false);
     if (pts.length == 1) {
       _map.move(pts.first, 16);
@@ -223,6 +214,7 @@ class _MapScreenState extends State<MapScreen> {
   void _focus(AppState app, Member m) {
     final at = m.at;
     if (at == null) return;
+    _follower.stop();
     setState(() => _follow = false);
     _map.move(at, 16);
     if (m.isMe) return;

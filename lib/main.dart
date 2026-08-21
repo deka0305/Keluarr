@@ -89,19 +89,10 @@ class _Splash extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Container(
-                width: 64,
-                height: 64,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                    color: K.orange, borderRadius: BorderRadius.circular(19)),
-                child: const Text('KL',
-                    style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white,
-                        letterSpacing: -.5)),
-              ),
+              // Logo app. Latar putihnya sudah bagian dari berkas, jadi tidak
+              // perlu kotak berwarna di belakangnya lagi.
+              Image.asset('assets/logo.png',
+                  width: 96, height: 96, filterQuality: FilterQuality.medium),
               const SizedBox(height: 18),
               Text('MENYIAPKAN', style: mono(10, color: context.dim, track: 2)),
             ],
